@@ -1,0 +1,1147 @@
+---
+title: |
+ <b><div style="text-align: center"> Evaluación Practica Modelo de Venta Cruzada </div></b>
+author:  
+ name: Óscar Porta
+date: Mayo 2025
+output: 
+  rmdformats::readthedown:
+    code_folding: hide
+css: customOPS_med.css
+---
+
+
+
+# 1. Introducción
+
+Formamos parte del departamento de Analytics de una aseguradora de No Vida con fuerte presencia en la península ibérica. Nuestra posición, cercana al equipo de Marketing, nos permite participar en proyectos que apoyan la toma de decisiones estratégicas mediante el uso de modelos predictivos, segmentación y análisis de datos.
+
+En esta ocasión, se nos plantea desarrollar un modelo de venta cruzada con el objetivo de identificar, entre los clientes que ya tienen contratado un seguro de hogar, aquellos que presentan una mayor probabilidad de contratar también un seguro de auto. La hipótesis de negocio es clara: a mayor número de pólizas por cliente, mayor probabilidad de retención y rentabilidad futura.
+
+Trabajaremos con datos históricos que recogen información sobre clientes a los que se les ofreció un seguro de auto y cuya respuesta (positiva o negativa) quedó registrada. Nuestro objetivo es construir un modelo que optimice las campañas comerciales, permitiendo priorizar aquellos perfiles con mayor propensión a contratar el nuevo producto.
+
+
+# 2. Paquetes y opciones
+
+A continuación se enumeran y describen brevemente los paquetes de R empleados:
+
+* **data.table**: Librería para la importación y exportación de datos en csv de forma muy rápida. 
+
+* **tidyverse**: Librería que incluye varias sub-librerías para el manejo cómodo, ordenado y limpio de datos, entre ellas **dplyr**, **tidyr**, **stringr** o **ggplot2**.
+
+* **reactable**: Librería para la creación de tablas interactivas y editables con múltiples funcionalidades.
+
+* **h2o**: Paquete empleado para conectar R con el framework de h2o.
+
+* **formattable**: Librería para la creación de tablas con amplias opciones de formato.
+
+* **janitor**: Librería que utilizaremos para la agrupación de tablas.
+
+* **parallel**: Librería que habilita la posibilidad de ejecutar código de forma paralela  y distribuida.
+
+* **skimr**: Para obtener el resumen de métricas de las variables de un conjunto de datos.
+
+* **Information**: Provee funciones para el análisis de datos en el contexto de la clasificación binaria.
+
+* **InformationValue**: Para calcular el Information Value, métrica que mide la capacidad predictiva de una variable categórica en el contexto de la clasificación binaria.
+
+* **grid**: Se emplea para representar objetos gráficamente. 
+
+* **gridExtra**: Extensión de la librería anterior.
+
+* **corrplot**: Para calcular la matriz de correlación de variables numéricas.
+
+* **vcd**: Para ver el grado de asociación de variables categóricas mediante tablas de contingencia y V de Cramer.
+
+* **DataExplorer**: Librería para hacer gráficos de EDA de forma automática y rápida.
+
+* **Stringi:** para solucionar problemas de codificación de carácteres.
+
+```{r Pack&Opt, message=FALSE, warning=FALSE}
+
+# Función para cargar los paquetes y previamente instalar los no existentes
+enable_packages <- function(x){
+  for( i in x ){
+    if( ! require( i , character.only = TRUE ) ){
+      install.packages( i , dependencies = TRUE )
+      require( i , character.only = TRUE )
+    }
+  }
+}
+
+install.packages(
+    "https://cran.r-project.org/src/contrib/Archive/InformationValue/InformationValue_1.2.3.tar.gz",
+    repos = NULL,
+    type = "source"
+)
+
+# Paquetes
+enable_packages(c("data.table", "tidyverse","reactable", "h2o" ,"formattable", "janitor", "parallel", "skimr", "Information", "InformationValue", "creditmodel", "grid", "gridExtra", "corrplot", "vcd", "DataExplorer", "stringi"))
+
+# Quitamos notación científica
+options(scipen = 999)
+
+```
+
+# 3. Funciones auxiliares
+
+*Se recopilan a continuación una serie de funciones auxiliares para facilitar el tratamiento y visualización de los datos, incluyendo una pequeña descripción. Estas funciones nos permitirán visualizar de forma dinámica los datos en tablas interactivas, resaltando si lo deseamos la variable objetivo o de interés.*
+
+```{r funcAux, message=FALSE, warning=FALSE}
+
+# Funciones 
+
+## reactViewTableTarget: 
+### librería: reactable
+### objetivo: ver los datos de forma interactiva y dinámica en HTML, resaltando targets
+
+reactViewTableTarget <- function(data, vecTargetVar){
+  
+  # Apoyo previo para formato tabla - usamos Coral para resaltar targets
+  coldefsTargets <- list(
+    colDef(
+      headerStyle = "background: #F76C5E; color: white;",
+      style = "background: #FDEDEA;",  # coral clarito
+      class = "border-left"
+    )
+  )
+  
+  coldefsTargets <- rep(coldefsTargets, length(vecTargetVar))
+  names(coldefsTargets) <- vecTargetVar 
+  
+  data %>%  
+    reactable(
+      bordered = TRUE,
+      filterable = FALSE,
+      resizable = TRUE,
+      searchable = TRUE,
+      showPageSizeOptions = TRUE,
+      defaultPageSize = 10,
+      pageSizeOptions = c(5, 10, 20, 50, 100),
+      borderless = FALSE,
+      highlight = TRUE, 
+      outlined = TRUE,
+      showSortIcon = TRUE,
+      showSortable = TRUE,
+      width= "100%",
+      defaultColDef = colDef(
+        align = "center",
+        headerStyle = "background: #2E86AB; color: white;",  # Azul Mediterráneo
+        style = "background: #F4F9FB;",  # Fondo blanco ligeramente azulado
+        cell = function(value) {
+          if (!is.na(value) && is.numeric(value)) {
+            if (value %% 1 == 0) {
+              return(as.integer(value))
+            } else {
+              return(format(round(value, 2), nsmall = 2))
+            }
+          } else {
+            return(value)
+          }
+        }
+      ),
+      columns = coldefsTargets
+    )
+}
+
+## reactViewTable:
+### librería: reactable
+### objetivo: ver los datos de forma interactiva y dinámica en HTML
+
+reactViewTable <- function(data){
+  
+  data %>%  
+    reactable(
+      bordered = TRUE,
+      filterable = FALSE,
+      resizable = TRUE,
+      searchable = TRUE,
+      showPageSizeOptions = TRUE,
+      defaultPageSize = 10,
+      pageSizeOptions = c(5, 10, 20, 50, 100),
+      borderless = FALSE,
+      highlight = TRUE, 
+      outlined = TRUE,
+      showSortIcon = TRUE,
+      showSortable = TRUE,
+      width= "100%",
+      defaultColDef = colDef(
+        align = "center",
+        headerStyle = "background: #2E86AB; color: white;",
+        style = "background: #F4F9FB;",
+        cell = function(value) {
+          if (is.na(value)) {
+            return("")
+          } else if (is.numeric(value)) {
+            if (value %% 1 == 0) {
+              return(as.integer(value))
+            } else {
+              return(format(round(value, 2), nsmall = 2))
+            }
+          } else {
+            return(value)
+          }
+        }
+      )
+    )
+}
+```
+
+# 4. Datos
+
+Se recoge la explicación de las variables y posteriormente se muestra el conjunto de datos de entrenamiento.
+
+## 4.1 Variables
+
+### Identificador
+
+* **Identificador:** código único que identifica al cliente.
+
+### Variables explicativas
+
+* **Sexo:** género del cliente (masculino/femenino).
+* **Edad:** edad del cliente (en años).
+* **Carnet:** indica si el cliente dispone de licencia de conducción vigente (1 = sí, 0 = no).
+* **Zona:** zona de España donde reside el asegurado.
+* **AntiguedadVehiculo:** años de antigüedad del vehículo.
+* **SiniestroAnterior:** indica si el cliente ha tenido siniestros de auto con su seguro actual o anteriores (1 = sí, 0 = no).
+* **PrimaMensualActual:** prima mensual actualmente pagada por el cliente.
+* **AntiguedadCliente:** tiempo (en meses) que el cliente lleva con la compañía.
+
+### Variable objetivo
+
+* **Contratado:** indica si el cliente ha contratado un seguro de auto teniendo ya uno de hogar (1 = sí, 0 = no).
+
+
+# 5. Base de datos
+
+En este caso práctico, la base de datos ya está dividida en entrenamiento y validación. 
+
+*Antes de realizar cualquier análisis, realizamos un intento de visualizar los datos con la función `reactViewTableTarget()` (no incluiremos este chunk en el informe), lo que nos permitió detectar un error de codificación en la variable `SiniestroAnterior`. A partir de ese fallo, inspeccionamos manualmente los valores de dicha variable y realizamos una limpieza controlada y justificada, documentando todo el proceso a continuación.*
+
+*Este paso es fundamental ya que, al utilizar funciones como `reactViewTableTarget()` basadas en la librería `reactable`, cualquier carácter especial o mal codificado puede provocar errores al renderizar las tablas interactivas. Para garantizar una correcta visualización de los datos y evitar fallos en la generación de tablas HTML, hemos comprobado y corregido la codificación de las columnas necesarias.*
+
+```{r ExploracionInicial, message=FALSE, warning=FALSE}
+# Cargamos los datos sin visualización para inspección manual
+datos <- fread("dataVCTrainCasoPractico.csv", encoding = "UTF-8") %>% as.data.frame()
+datos <- datos %>% select(-Identificador)
+
+# Mostramos las primeras filas (sin reactable aún)
+head(datos, 10)
+
+# Revisamos niveles únicos de SiniestroAnterior
+unique(datos$SiniestroAnterior)
+```
+```{r CodificacionCheck, message=FALSE, warning=FALSE}
+# Comprobamos qué columnas tienen errores de codificación
+sapply(datos, function(x) {
+  if (is.character(x)) any(!stri_enc_isutf8(x)) else FALSE
+})
+```
+
+```{r DataImport, message=FALSE, warning=FALSE}
+# Cargamos los datos desde CSV con codificación forzada a UTF-8
+datos <- fread("dataVCTrainCasoPractico.csv", encoding = "UTF-8") %>% as.data.frame()
+
+# Eliminamos el identificador por no tener valor predictivo
+datos <- datos %>% select(-Identificador)
+
+# Reparamos codificación UTF-8 en la columna detectada
+datos$SiniestroAnterior <- stri_encode(datos$SiniestroAnterior, from = "", to = "UTF-8") 
+```
+
+
+
+```{r LimpiezaSiniestroAnterior, message=FALSE, warning=FALSE}
+
+# Normalizamos valores de "sí" mal codificados o escritos
+datos$SiniestroAnterior <- tolower(datos$SiniestroAnterior)       # pasamos todo a minúsculas
+datos$SiniestroAnterior <- trimws(datos$SiniestroAnterior)        # quitamos espacios
+datos$SiniestroAnterior <- gsub("s.+", "Sí", datos$SiniestroAnterior)  # todo lo que empiece por "s" lo pasamos a "Sí"
+datos$SiniestroAnterior <- gsub("no", "No", datos$SiniestroAnterior)  # estandarizamos "No"
+
+# Convertimos en factor con niveles definidos
+datos$SiniestroAnterior <- factor(datos$SiniestroAnterior, levels = c("No", "Sí"))
+```
+
+```{r}
+# Visualizamos las primeras filas con la variable objetivo destacada
+datos %>% head(1000) %>% reactViewTableTarget("Contratado")
+```
+
+# 6. Metodología de trabajo
+
+*La metodología de trabajo a seguir en este proyecto será:*
+
+* *Análisis de los datos*
+* *Análisis de las variables, incluyendo trameado de las numéricas*
+* *Creación del modelo, con interpretación de los factores más relevantes*
+* *Predicciones futuras, analizando la bondad de ajuste y utilidad para negocio*
+
+# 7. Análisis general de los datos
+
+Comenzamos analizando los estadísticos básicos de las variables del dataset, lo que nos permite detectar si existen variables mal tipadas (por ejemplo, numéricas que en realidad son identificadores o códigos) o si hay valores perdidos. Posteriormente, revisamos la distribución de la variable objetivo para valorar su equilibrio y las implicaciones en el modelado.
+
+```{r checkTypes, message=FALSE, warning=FALSE}
+
+str(datos)
+
+```
+
+```{r fixVariableTypes, message=FALSE, warning=FALSE}
+# Limpieza y conversión segura de variables mal tipadas
+datos <- datos %>%
+  mutate(
+    # Edad
+    Edad = trimws(Edad),
+    Edad = na_if(Edad, "Desconocido"),
+    Edad = as.numeric(Edad),
+
+    # Antigüedad del vehículo: convertimos "9+" en 10
+    AntiguedadVehiculo = trimws(AntiguedadVehiculo),
+    AntiguedadVehiculo = ifelse(AntiguedadVehiculo == "9+", "10", AntiguedadVehiculo),
+    AntiguedadVehiculo = as.numeric(AntiguedadVehiculo)
+  )
+```
+
+Durante la limpieza de la variable `AntiguedadVehiculo`, detectamos el valor `"9+"`, que representa vehículos con más de 9 años de antigüedad. Dado que se trata de una categoría válida y con sentido actuarial, decidimos conservar la información, transformándola en el valor numérico `10`, que representa correctamente la condición de antigüedad superior a 9 años.
+
+
+
+```{r skimAnalysis, message=FALSE, warning=FALSE}
+
+# Resumen de variables con skimr
+summary <- skim(datos) 
+summary <- summary %>%
+  select(skim_variable, n_missing, 
+         numeric.mean, numeric.sd, 
+         numeric.p25, numeric.p50, numeric.p75)
+
+# Visualización con colores personalizados
+summary %>% reactViewTable()
+```
+
+```{r}
+
+# Tabla resumen de la variable objetivo
+target_group <- datos %>% tabyl(Contratado)
+target_group <- target_group %>% mutate(Percent = round(percent,4)*100) %>% rename(N = n) %>% select(-percent)
+
+# Visualización con colores personalizados
+target_group %>% reactViewTable()
+```
+<br>
+
+Puede observarse que la proporción de clientes que contrataron un seguro de automóvil es considerablemente menor (12,26%) frente a los que no lo contrataron (87,74%). Esta variable objetivo está desbalanceada, lo cual puede afectar a la elección de métricas de evaluación en el modelado. Por ejemplo, un modelo que predijera siempre “no contratar” tendría un accuracy elevado, pero no sería útil para negocio.
+
+# 8. Análisis de las variables
+
+A la hora de desarrollar un modelo de propensión para la venta cruzada, es clave realizar una ordenación y segmentación de la cartera de clientes en función de su afinidad o disposición a contratar un nuevo producto. En nuestro caso, analizamos clientes que ya tienen un seguro de hogar, y queremos identificar aquellos con mayor probabilidad de contratar también un seguro de automóvil.
+
+Una forma eficaz de segmentar a los clientes es en función del valor que toman sus atributos dentro de determinados rangos o categorías, especialmente en el caso de las variables numéricas. Por este motivo, en el sector asegurador no suele emplearse directamente el valor continuo de las variables cuantitativas como predictor, sino que estas se discretizan en tramos representativos.
+
+Antes de aplicar técnicas de discretización, analizamos la distribución de las variables explicativas y su relación con la variable objetivo. Para ello, utilizamos la librería `DataExplorer`, que nos permite obtener una visión eficiente del comportamiento general de los datos y facilita la detección de posibles transformaciones a aplicar en fases posteriores del análisis.
+
+```{r EDA_general, message=FALSE, warning=FALSE, fig.align='center', fig.width=12, fig.height=6}
+
+# Creamos versión character de la variable objetivo
+datos <- datos %>% mutate(Contratado_char = as.character(Contratado))
+
+# Distribución general de las variables explicativas
+datos %>% select(-c(Contratado, Contratado_char)) %>% plot_bar()
+
+# Distribución condicionada a la variable objetivo
+datos %>% select(-Contratado) %>% plot_bar(by = 'Contratado_char')
+```
+
+A continuación, realizaremos el trameado de las variables numéricas, buscando que los tramos obtenidos estén suficientemente representados (al menos el 5% de la población en cada uno). La metodología más comúnmente aceptada en el sector asegurador para jerarquizar variables es mediante el uso de indicadores de capacidad discriminante como el Weight of Evidence (WOE) y el Information Value (IV).
+
+El WOE mide el poder discriminante de cada tramo de una variable, evaluando la proporción de sucesos positivos (clientes que contratan el seguro de auto) y negativos (clientes que no lo contratan). El IV se obtiene a partir de los WOE de una variable, y resume su capacidad predictiva global respecto a la variable objetivo.
+
+Los cálculos se realizan según las siguientes fórmulas:
+
+$$ WOE_{attribute} = \ln\left(\frac{Good_{attribute}}{Bad_{attribute}}\right) $$
+
+$$ IV = \sum_{attribute=0}^{n} \left( Good_{attribute} - Bad_{attribute} \right) \times WOE_{attribute} $$
+
+Estos indicadores se utilizarán más adelante como criterio para definir los puntos de corte óptimos en el trameado de las variables y para seleccionar aquellas variables que realmente aportan capacidad predictiva al modelo.
+
+
+Realizamos el cálculo del Information Value (IV) y del Weight of Evidence (WOE) para nuestras variables numéricas. Estas métricas nos permiten evaluar la capacidad discriminante de cada variable con respecto a la variable objetivo `Contratado`. Para ello, utilizamos la función `create_infotables()` que calcula automáticamente los tramos y su IV asociado, manteniendo siempre que cada grupo contenga al menos un 5% de la población.
+
+```{r dfIvFunction, message=FALSE, warning=FALSE}
+# Función para calcular IV, WOE y colocar IV_tramo antes de IV acumulado
+df_iv <- function(df, var, bins){
+  
+  var <- as.symbol(var)
+  df_temp <- df %>% select(!!var, Contratado)
+  
+  # Calculamos tablas con create_infotables
+  iv <- create_infotables(data = df_temp, y = 'Contratado', bins = bins, parallel = FALSE)
+  
+  # Extraemos nombre real de la variable
+  var_name <- as.character(var)
+  
+  # Añadimos IV_tramo y reordenamos columnas
+  iv$Tables[[var_name]] <- iv$Tables[[var_name]] %>%
+    mutate(IV_tramo = IV - lag(IV, default = 0)) %>%
+    relocate(IV_tramo, .before = IV)
+  
+  return(iv)
+}
+```
+
+Definimos ciertos grupos en los que queremos categorizar las variables explicativas numéricas, con esto la función divide en esos grupos estableciendo ciertos puntos de corte para que eso grupos estén poblados en una proporción similar. 
+
+```{r calculateIvVariables, message=FALSE, warning=FALSE}
+# Aplicación de la función IV a nuestras variables numéricas
+edad_iv <- df_iv(datos, 'Edad', 4)
+antigVeh_iv <- df_iv(datos, 'AntiguedadVehiculo', 3)
+prima_iv <- df_iv(datos, 'PrimaMensualActual', 3)
+antigCl_iv <- df_iv(datos, 'AntiguedadCliente', 4)
+
+# Visualización con IV_tramo incluido
+edad_iv$Tables$Edad %>% reactViewTable()
+antigVeh_iv$Tables$AntiguedadVehiculo %>% reactViewTable()
+prima_iv$Tables$PrimaMensualActual %>% reactViewTable()
+antigCl_iv$Tables$AntiguedadCliente %>% reactViewTable()
+
+# Tabla final con IVs numéricos (ordenados)
+IV_variables <- data.frame(
+  Variable = c("Edad", "AntiguedadVehiculo", "PrimaMensualActual", "AntiguedadCliente"),
+  IV = round(c(0.42, 0.30, 0.01, 0.00), 3)
+) %>% arrange(desc(IV))
+
+IV_variables %>% reactViewTable()
+```
+<br>
+
+A partir del análisis de IV y WOE observamos que:
+
+* La variable `Edad` presenta un Information Value (IV) alto (0.42), lo que indica una alta capacidad discriminante.
+
+* `AntiguedadVehiculo` tiene un IV de 0.30, también considerado de predictividad media-alta.
+
+* Por otro lado, `PrimaMensualActual` y `AntiguedadCliente` presentan IVs muy bajos (0.01 y 0.00 respectivamente), por lo que podrían considerarse poco relevantes a nivel predictivo.
+
+
+En cuanto a los valores de WOE, se observa que las categorías con mayor proporción relativa de contrataciones (sucesos "buenos") tienden a mostrar un WOE positivo. Por ejemplo, en `Edad`, los tramos `[36,48]` y `[49,85]` muestran WOE positivos, lo que indica que en estos grupos hay mayor propensión a contratar un seguro de auto. Lo mismo ocurre con el tramo `[3,10]` en `AntiguedadVehiculo`.
+
+*Recordemos que el IV total de una variable se obtiene como la suma del IV de cada tramo. A modo orientativo, los valores IV pueden interpretarse de la siguiente manera:*
+
+- *IV < 0.02: sin capacidad predictiva*
+- *0.02–0.1: predictividad débil*
+- *0.1–0.3: predictividad media*
+- *> 0.3: predictividad alta*
+
+A continuación, definimos funciones que categoricen `Edad` y `AntiguedadVehiculo` en función de los tramos observados.
+
+
+```{r define_buckets, message=FALSE, warning=FALSE}
+# Trameado de Edad según IV
+bucket_edad <- function(variable){
+  ifelse(variable <= 24, "Edad_01_[20-24]",
+  ifelse(variable > 24 & variable <= 35, "Edad_02_[25-35]",
+  ifelse(variable > 35 & variable <= 48, "Edad_03_[36-48]",
+  "Edad_04_[49-85]")))
+}
+
+# Trameado de Antigüedad del Vehículo según IV
+bucket_antigVeh <- function(variable){
+  ifelse(variable <= 0, "AntVeh_01_[0]",
+  ifelse(variable > 0 & variable <= 2, "AntVeh_02_[1-2]",
+  "AntVeh_03_[3-10]"))
+}
+```
+
+```{r aply_buckets, message=FALSE, warning=FALSE}
+# Aplicamos los buckets al dataset
+datos <- datos %>%
+  mutate(
+    Edad_bucket = bucket_edad(Edad),
+    AntiguedadVehiculo_bucket = bucket_antigVeh(AntiguedadVehiculo)
+  )
+
+# Visualizamos para control
+datos %>% head(1000) %>% reactViewTable()
+```
+
+<br>
+
+A continuación analizamos el IV y WOE de las variables cualitativas, con el objetivo de identificar cuáles de ellas presentan una mayor capacidad discriminante respecto a la variable objetivo `Contratado`. Para ello, utilizamos una función auxiliar basada en `WOETable()` que nos permite calcular de forma sencilla los valores por categoría.
+
+Es importante señalar que, a diferencia de las variables numéricas, la función `WOETable()` ya devuelve directamente el valor del IV correspondiente a cada categoría (no acumulado). Para evitar confusiones, renombramos esa columna como `IV_tramo` y, además, calculamos una columna adicional `IV` que representa el valor acumulado del IV para cada variable.
+
+Recordamos que para que el cálculo funcione correctamente, todas las variables deben estar en formato `factor`.
+
+```{r woe_function, message=FALSE, warning=FALSE}
+# Función auxiliar para calcular tabla WOE/IV por variable categórica con IV_tramo y IV acumulado
+woe_variable <- function(variable){
+  
+  tabla <- WOETable(variable, datos$Contratado, valueOfGood = 1) # cálculo WOE/IV
+  
+  tabla <- tabla %>%
+    rename(
+      Categoria = CAT,
+      Propensos_no = BADS,
+      Propensos_yes = GOODS,
+      PCT_yes = PCT_G,
+      PCT_no = PCT_B,
+      IV_tramo = IV
+    ) %>%
+    mutate(IV = cumsum(IV_tramo)) %>%  # IV acumulado
+    relocate(IV_tramo, .before = IV)   # colocamos IV_tramo antes del acumulado
+  
+  return(tabla)
+}
+```
+
+```{r convert_factor, message=FALSE, warning=FALSE}
+datos <- datos %>%
+  mutate(
+    Sexo = as.factor(Sexo),
+    Zona = as.factor(Zona),
+    Carnet = as.factor(Carnet),
+    SiniestroAnterior = as.factor(SiniestroAnterior),
+    Edad_bucket = as.factor(Edad_bucket),
+    AntiguedadVehiculo_bucket = as.factor(AntiguedadVehiculo_bucket)
+  )
+```
+
+```{r woeAplication, message=FALSE, warning=FALSE}
+# Cálculo del WOE para cada variable cualitativa
+woe_sexo <- woe_variable(datos$Sexo)
+woe_zona <- woe_variable(datos$Zona)
+woe_carnet <- woe_variable(datos$Carnet)
+woe_siniestro <- woe_variable(datos$SiniestroAnterior)
+woe_edad_bucket <- woe_variable(datos$Edad_bucket)
+woe_antigveh_bucket <- woe_variable(datos$AntiguedadVehiculo_bucket)
+
+# Visualización de las tablas
+listWoe <- list(
+  woe_sexo,
+  woe_zona,
+  woe_carnet,
+  woe_siniestro,
+  woe_edad_bucket,
+  woe_antigveh_bucket
+)
+
+for (tabla in listWoe) {
+  print(reactViewTable(tabla))
+}
+```
+
+
+Tras analizar el IV por categoría de cada variable cualitativa, observamos que `SiniestroAnterior` presenta una capacidad predictiva muy elevada (IV = 2.20), lo que indica una fuerte relación con la variable objetivo. Aunque esto no necesariamente invalida su uso, sí nos obliga a revisar su comportamiento con el resto de predictores en fases posteriores, ya que podría solapar información clave o provocar sobreajuste.
+
+Vamos a analizar las variables visualmente mediante los gráficos de propensión junto con el IV final de cada una para valorar si tienen valor desde el punto de vista de negocio o si podrían aportar interacción con otras variables.
+
+
+```{r func_propension, message=FALSE, warning=FALSE}
+# Función para calcular tasas de propensión y porcentaje de población por tramo
+propension <- function(df, var){
+  
+  total_op <- nrow(df)
+  var <- as.symbol(var)
+  
+  # Número de contrataciones por tramo
+  df1 <- df %>% group_by(!!var, Contratado) %>% summarize(cliente_prop = n(), .groups = "drop")
+  
+  # Tamaño total del grupo por tramo
+  df2 <- df %>% group_by(!!var) %>% summarize(muestra_grupo = n(), .groups = "drop")
+  
+  # Unimos y calculamos tasas
+  df3 <- left_join(df1, df2, by = rlang::as_name(var)) %>%
+    mutate(
+      op_total = total_op,
+      tasa_propension = cliente_prop / muestra_grupo,
+      muestra_total = muestra_grupo / total_op
+    )
+  
+  # Nos quedamos solo con los tramos que contrataron (Contratado == 1)
+  df_defaults <- df3 %>% filter(Contratado == 1) %>%
+    select(-Contratado) %>%
+    select(!!var, muestra_grupo, muestra_total, cliente_prop, tasa_propension)
+  
+  return(df_defaults)
+}
+```
+
+
+```{r graf_propension, message=FALSE, warning=FALSE}
+# Función para graficar la tasa de propensión por tramo
+propension_grafico <- function(df, var){
+  
+  var <- as.symbol(var)
+
+  ggplot(df, aes(!!var, tasa_propension)) + 
+    geom_col(aes(y = muestra_grupo), fill="#2E86AB", alpha=1.0) + 
+    geom_line(aes(y = tasa_propension * 350000), group = 1, color="#F76C5E") + 
+    geom_text(aes(y = tasa_propension * 350000,
+                  label = paste0(round(tasa_propension * 100, 2), "%")),
+              vjust = 1.4, color = "black", size = 4) +
+    labs(y = "") +
+    theme_classic() +
+    theme(axis.text.x = element_text(vjust = 0.6),
+          axis.text = element_text(size = 12),
+          axis.title = element_text(size = 8, face = "bold"),
+          legend.position = "bottom",
+          legend.title = element_blank())
+}
+```
+
+```{r aplicar_propension, message=FALSE, warning=FALSE, fig.align='center', fig.width=12, fig.height=4}
+
+# Edad
+edad_prop <- propension(datos, "Edad_bucket")
+propension_grafico(edad_prop, "Edad_bucket")
+
+# Antigüedad vehículo
+antveh_prop <- propension(datos, "AntiguedadVehiculo_bucket")
+propension_grafico(antveh_prop, "AntiguedadVehiculo_bucket")
+
+# Sexo
+sexo_prop <- propension(datos, "Sexo")
+propension_grafico(sexo_prop, "Sexo")
+
+# Zona
+zona_prop <- propension(datos, "Zona")
+propension_grafico(zona_prop, "Zona")
+
+# Carnet
+carnet_prop <- propension(datos, "Carnet")
+propension_grafico(carnet_prop, "Carnet")
+
+# Siniestro anterior
+siniestro_prop <- propension(datos, "SiniestroAnterior")
+propension_grafico(siniestro_prop, "SiniestroAnterior")
+```
+
+```{r resumen_IV_final, message=FALSE, warning=FALSE }
+# Creamos vector con IV total tomando la última fila de la columna acumulada
+iv_final <- c(
+  tail(woe_sexo$IV, 1),
+  tail(woe_edad_bucket$IV, 1),
+  tail(woe_carnet$IV, 1),
+  tail(woe_zona$IV, 1),
+  tail(woe_siniestro$IV, 1),
+  tail(woe_antigveh_bucket$IV, 1)
+)
+
+# Nombres asociados
+variables_finales <- c("Sexo", 
+                       "Edad_bucket", 
+                       "Carnet", 
+                       "Zona", 
+                       "SiniestroAnterior", 
+                       "AntiguedadVehiculo_bucket")
+
+# Creamos tabla ordenada
+IV_variables_final <- data.frame(Variable = variables_finales, IV = round(iv_final, 3)) %>%
+  arrange(desc(IV))
+
+# Visualización interactiva
+IV_variables_final %>% reactViewTable()
+```
+
+
+Se excluyen como variables explicativas del modelo en función del valor del Information Value (IV) que presentan:
+
+* La variable `Carnet`, al presentar un IV igual a 0, carece de capacidad discriminante respecto a la variable objetivo, por lo que será descartada.
+
+* `Sexo` muestra un IV muy bajo (0.02), justo en el límite inferior recomendado para considerar una variable como mínimamente útil. Aunque su aportación es muy limitada, de momento la mantenemos para observar su comportamiento combinado con otras variables.
+
+* `Zona` (0.08) presenta una capacidad discriminante baja, pero por encima del umbral mínimo, por lo que será conservada para análisis posteriores.
+
+* `AntiguedadVehiculo_bucket` (0.30) y `Edad_bucket` (0.44) tienen un IV moderado, mostrando una contribución relevante a la predicción, por lo que serán incluidas en el modelo.
+
+* Por último, `SiniestroAnterior` alcanza un IV muy elevado (2.20), lo que podría indicar una alta colinealidad o incluso un carácter autopredictivo con respecto a la variable objetivo. Aunque no necesariamente debe descartarse por sí sola, es necesario analizar con precaución su interacción con el resto de predictores.*Esta verificación se realizará mediante la matriz de V de Cramer en el siguiente apartado, lo que nos permitirá valorar si su inclusión genera colinealidad o aporta valor predictivo independiente.*
+
+
+En el siguiente apartado se analizará el grado de asociación entre variables explicativas mediante la V de Cramer, para comprobar si existen relaciones fuertes que justifiquen eliminar alguna variable adicional.
+
+Antes de este punto, se eliminan las variables del dataset que serán excluidas:
+
+```{r delete_low_IV, message=FALSE, warning=FALSE }
+# Variables descartadas por su bajo IV o porque ya no aportan al modelo
+drop_variables <- c("Carnet", "Edad", "AntiguedadVehiculo", "PrimaMensualActual", "Contratado_char")
+
+# Creamos el nuevo dataset con las variables finales
+datos_fin <- datos %>% select(-all_of(drop_variables))
+
+# Visualización de los primeros registros para ver el resultado
+datos_fin %>% head(1000) %>% reactViewTableTarget("Contratado")
+```
+
+```{r V_Cramer, message=FALSE, warning=FALSE, fig.align='center', fig.width=12, fig.height=6 }
+# Seleccionamos solo variables explicativas (excluimos variable objetivo)
+tabla_cor <- datos_fin %>% select(-Contratado)
+
+# Creamos matriz vacía con los nombres de las variables como filas y columnas
+empty_m <- matrix(
+  ncol = length(tabla_cor),
+  nrow = length(tabla_cor),
+  dimnames = list(names(tabla_cor), names(tabla_cor))
+)
+
+# Función para calcular V de Cramer entre pares de variables
+calculate_cramer <- function(m, df) {
+  for (r in seq(nrow(m))) {
+    for (c in seq(ncol(m))) {
+      m[[r, c]] <- assocstats(table(df[[r]], df[[c]]))$cramer
+    }
+  }
+  return(m)
+}
+
+# Calculamos la matriz de V de Cramer
+cor_matrix <- calculate_cramer(empty_m, tabla_cor)
+cor_matrix <- round(cor_matrix, 2)
+
+# Visualizamos la matriz como un gráfico
+corrplot(cor_matrix, method = "color", type = "upper", tl.col = "black", tl.srt = 45, addCoef.col = "black", number.cex = 0.9 )
+```
+<br>
+
+Tras calcular la matriz de V de Cramer, observamos que, en general, las variables explicativas presentan una relación débil entre sí, lo cual es deseable para evitar colinealidad en el modelo.
+
+Sin embargo, se detecta una relación relevante entre `Edad_bucket` y `AntiguedadVehiculo_bucket` (V = 0.49), así como entre `SiniestroAnterior` y ambas (`Edad_bucket` con V = 0.33 y `AntiguedadVehiculo_bucket` con V = 0.30). Esta situación, unida al hecho de que `SiniestroAnterior` presenta un IV extremadamente alto (2.20), nos lleva a considerar esta variable como potencialmente autopredictiva.
+
+Aunque no se ha evaluado directamente su relación con la variable objetivo `Contratado`, el valor del IV ya refleja que su comportamiento discrimina en exceso, lo que puede ocultar el valor predictivo del resto de variables y favorecer el sobreajuste. Por tanto, decidimos excluir `SiniestroAnterior` del modelo final.
+
+El resto de variables mantienen niveles aceptables de independencia entre sí, por lo que serán conservadas para la fase de modelización.
+
+Como criterios generales, recordamos que un predictor debe:
+
+* Tener sentido desde un punto de vista de negocio
+* Estar respaldado por indicadores estadísticos adecuados (IV, colinealidad, etc.)
+
+```{r delete_SiniestroAnterior, message=FALSE, warning=FALSE}
+# Eliminamos SiniestroAnterior del dataset final por colinealidad e IV extremo
+datos_fin <- datos_fin %>% select(-SiniestroAnterior)
+
+# Vista de control tras la eliminación
+datos_fin %>% head(1000) %>% reactViewTableTarget("Contratado")
+```
+
+# 9.  Creación del modelo - GLM
+
+Para modelizar aquellos clientes susceptibles de contratar un seguro de auto adicional con la compañía, vamos a emplear el framework de H2O, que permite trabajar con grandes volúmenes de datos y proporciona herramientas eficientes de modelización.
+
+Comenzamos inicializando el clúster H2O y transformando los datos de R al formato H2OFrame, paso previo necesario para la construcción del modelo. Es importante disponer de la última versión de Java instalada.
+
+
+```{r H2O_init, message=FALSE, warning=FALSE}
+# Núcleos disponibles
+n_cores <- detectCores()
+
+# Inicializamos el clúster H2O
+h2o.init(ip = "localhost",
+         nthreads = n_cores - 1,
+         max_mem_size = "4g")
+```
+<br>
+
+
+Todo el proceso necesario para la construcción final del modelo se hará en este framework. Notar que tanto las variables explicativas como la variable dependiente se definen como un vector de R.
+
+
+```{r H2O_data_split, message=FALSE, warning=FALSE}
+# Definimos variable objetivo y predictoras
+Y <- c("Contratado")
+X <- colnames(datos_fin %>% select(-Contratado))
+
+# Convertimos a H2OFrame
+muestra_h2o <- as.h2o(datos_fin)
+
+# Convertimos la variable objetivo a factor
+muestra_h2o[, Y] <- as.factor(muestra_h2o[, Y])
+
+# División train / validación
+set.seed(222)
+split <- 0.75
+muestra <- h2o.splitFrame(data = muestra_h2o, ratios = split, seed = 222)
+
+entrenamiento <- muestra[[1]]
+validacion <- muestra[[2]]
+
+# Tablas resumen
+table.H2OFrame(entrenamiento$Contratado) %>% as.data.frame() %>% reactViewTable()
+table.H2OFrame(validacion$Contratado) %>% as.data.frame() %>% reactViewTable()
+```
+<br>
+
+Vemos las tablas de frecuencia de la variable objetivo Contratado en los dos subconjuntos generados tras el split de datos (entrenamiento y validacion).
+
+Claramente la variable objetivo está desbalanceada: aproximadamente un 12-13% de “sí” (1) frente a un 87-88% de “no” (0).
+
+Este desbalance:
+
+* Es típico en problemas de propensión o churn en seguros y marketing.
+
+* No nos impide modelizar, pero nos obliga a tener cuidado con métricas como el accuracy, porque un modelo que predijera todo 0 tendría un accuracy alto… pero no serviría.
+
+
+Definimos a continuación un modelo de regresión logística (binomial) mediante el framework H2O, con enlace logit y sin regularización (lambda = 0). Además, activamos el cálculo de p-valores y la estandarización de las variables, lo que nos permitirá interpretar la magnitud relativa de los coeficientes. También se eliminan automáticamente columnas colineales para evitar problemas de multicolinealidad.
+
+```{r modelo_logit_H2O, message=FALSE, warning=FALSE}
+modelo_factor <- h2o.glm(
+  x = X,
+  y = Y,
+  training_frame = entrenamiento,
+  validation_frame = validacion,
+  seed = 222,
+  family = "binomial",
+  link = "logit",
+  lambda = 0,
+  compute_p_values = TRUE,
+  standardize = TRUE,
+  remove_collinear_columns = TRUE
+)
+
+# Coeficientes del modelo
+modelo_factor@model$coefficients_table %>% reactViewTable()
+
+# Importancia relativa de las variables
+modelo_factor@model$variable_importances %>% reactViewTable()
+```
+<br>
+
+Una vez entrenado el modelo, examinamos la tabla de coeficientes estimados y su importancia relativa. Observamos que las variables más relevantes en la predicción de la contratación del seguro de auto son las asociadas al grupo de edad (especialmente entre 36 y 48 años), seguidas por la antigüedad del vehículo y la zona geográfica.
+
+Por el contrario, variables como el sexo (nivel “Female”) o la antigüedad como cliente no presentan significancia estadística en el modelo (p > 0.05), lo que sugiere que su inclusión podría tener un impacto limitado en la mejora predictiva.
+
+```{r coeficientes_riesgo, message=FALSE, warning=FALSE, fig.align='center', fig.width=12, fig.height=6}
+# Gráfico de coeficientes estandarizados
+h2o.std_coef_plot(modelo_factor, num_of_features = 20)
+
+# Unimos coeficientes con importancia relativa
+df_coeficientes_peso <- modelo_factor@model$coefficients_table %>%
+  left_join(modelo_factor@model$variable_importances,
+            by = c("names" = "variable")) %>%
+  arrange(desc(percentage))
+
+# Eliminamos variable redundante
+df_coeficientes_peso$relative_importance <- NULL
+
+# Calculamos el factor de riesgo (odds ratio)
+df_coeficientes_peso$factor_riesgo <- ifelse(df_coeficientes_peso$names == "Intercept",
+                                             NA,
+                                             exp(df_coeficientes_peso$coefficients))
+
+# Reemplazamos NA por "." en la columna correspondiente
+df_coeficientes_peso[is.na(df_coeficientes_peso)] <- "."
+
+# Redondeamos columnas numéricas para mejorar la legibilidad
+df_coeficientes_peso <- df_coeficientes_peso %>%
+  mutate(across(c(coefficients, std_error, z_value, p_value,
+                  standardized_coefficients, scaled_importance,
+                  percentage, factor_riesgo), 
+                ~ ifelse(. == ".", ".", round(as.numeric(.), 2))))
+
+# Mostramos la tabla final
+df_coeficientes_peso %>% reactViewTable()
+```
+<br>
+
+En la tabla anterior se muestra la importancia de cada variable en el modelo, así como sus coeficientes y los factores de riesgo (odds ratio). Estos últimos nos permiten interpretar el efecto de cada categoría respecto a la categoría base del modelo.
+
+En nuestro caso, los niveles base que definen el perfil de cliente de referencia son:
+
+* Sexo: Female
+
+* Zona: Centro
+
+* Edad_bucket: Edad_01_[20-24]
+
+* AntiguedadVehiculo_bucket: AntVeh_01_[0]
+
+Así, cualquier otro nivel tendrá una mayor o menor probabilidad de contratación respecto a este perfil. Por ejemplo:
+
+* Un cliente con una antigüedad del vehículo entre 3 y 10 años tiene un odds ratio 2.39 veces superior al perfil base.
+
+* Un hombre presenta una probabilidad de contratación 1.20 veces mayor que una mujer, en términos de odds ratio.
+
+* Un cliente con edad entre 36 y 48 años tiene una propensión 4.32 veces superior a la del perfil base (20–24 años).
+
+Este tipo de análisis es fundamental para identificar perfiles con mayor afinidad a la contratación y diseñar estrategias de venta personalizadas.
+
+
+Tras esto, se analiza la bondad de ajuste del modelo:
+
+```{r eval_functions, message=FALSE, warning=FALSE}
+# Función para generar la matriz de confusión en modelos H2O
+matriz_confusion <- function(modelo, sample){  
+  performance <- h2o.performance(modelo, newdata = sample)
+  df <- as.data.frame(h2o.confusionMatrix(performance)) 
+  return(df)
+}
+
+# Función para generar la curva ROC
+curva_roc <- function(modelo){
+  
+  list(modelo) %>% 
+    map(function(x) x %>% 
+          h2o.performance(train = FALSE, valid = TRUE) %>% 
+          .@metrics %>% .$thresholds_and_metric_scores %>% 
+          .[c('tpr','fpr')] %>% 
+          add_row(tpr = 0, fpr = 0, .before = TRUE) %>% 
+          add_row(tpr = 0, fpr = 0, .before = FALSE)) %>% 
+    map2(c('Regresión Logística - Validación'),
+         function(x,y) x %>% add_column(model = y)) %>% 
+    reduce(rbind) %>% 
+    ggplot(aes(fpr, tpr, col = model)) +
+    geom_line() +
+    geom_segment(aes(x = 0, y = 0, xend = 1, yend = 1),
+                 linetype = 2, col = 'grey') +
+    xlab('Tasa de falsos positivos') +
+    ylab('Tasa de verdaderos positivos') +
+    ggtitle('Curva ROC') +
+    theme_minimal()
+}
+```
+
+Se visualiza tanto las matrices de confusión como la curva ROC. Es importante destacar que como la muestra de desarrollo del modelo está muy desbalanceada internamente *H2O* define un threshold que tiene en cuenta implícitamente la diferente proporción de clientes con interés o no de contratar un nuevo seguro de automóviles.
+
+```{r eval_modelo, message=FALSE, warning=FALSE, fig.align='center', fig.width=12, fig.height=6}
+# Matriz de confusión - Entrenamiento
+paste('Matriz de Confusión - Entrenamiento')
+matriz_confusion(modelo_factor, sample = entrenamiento) %>% reactViewTable()
+
+# Matriz de confusión - Validación
+paste('Matriz de Confusión - Validación')
+matriz_confusion(modelo_factor, sample = validacion) %>% reactViewTable()
+
+# Cálculo del AUC para entrenamiento y validación
+roc_train <- as.data.frame(h2o.auc(modelo_factor))
+colnames(roc_train) <- 'ROC_Entrenamiento'
+
+roc_val <- as.data.frame(h2o.auc(modelo_factor, valid = TRUE))
+colnames(roc_val) <- 'ROC_Validación'
+
+bind_cols(roc_train, roc_val) %>% reactViewTable()
+
+# Curva ROC
+curva_roc(modelo_factor)
+```
+
+<br>
+
+Al tener una muestra tan desbalanceada, la gran cantidad de verdaderos negativos generalmente eclipsa los efectos de los cambios en los falsos positivos. Por ello, es mejor calcular el AUPCR, pues es mucho más sensible tanto a los falsos positivos como los verdaderos positivos y los falsos negativos que el AUC. 
+
+```{r eval_AUCPR, message=FALSE, warning=FALSE}
+# Métrica AUCPR - evaluación en entrenamiento y validación
+rocpr_train <- as.data.frame(h2o.aucpr(modelo_factor))  # AUCPR en entrenamiento
+colnames(rocpr_train) <- 'AUCPR_Entrenamiento'
+
+rocpr_val <- as.data.frame(h2o.aucpr(modelo_factor, valid = TRUE))  # AUCPR en validación
+colnames(rocpr_val) <- 'AUCPR_Validación'
+
+# Tabla comparativa
+bind_cols(rocpr_train, rocpr_val) %>% reactViewTable()
+```
+<br>
+Tras evaluar la bondad de ajuste del modelo mediante las matrices de confusión, la curva ROC y las métricas AUC y AUCPR, observamos que el comportamiento del modelo es coherente y robusto en ambas muestras (entrenamiento y validación).
+
+El valor de AUC obtenido es de 0.69 tanto en entrenamiento como en validación, lo que indica una buena capacidad de discriminación global. Dado que nos enfrentamos a un problema con clases muy desbalanceadas, complementamos el análisis con la métrica AUCPR, más adecuada en este contexto.
+
+El valor de AUCPR alcanza los 0.20 en ambas muestras, lo que sitúa al modelo dentro de una capacidad predictiva moderada. Aunque no se trata de un clasificador perfecto, esta métrica refleja que el modelo es capaz de asignar una mayor probabilidad de contratación a aquellos clientes con mayor afinidad, superando claramente al azar. Además, el hecho de que ambos valores coincidan en entrenamiento y validación es indicativo de una buena generalización, sin sobreajuste.
+
+Dado que el objetivo no es tanto clasificar binariamente a los clientes sino ordenarlos por su propensión a contratar (ranking), el modelo cumple satisfactoriamente con su cometido. Este tipo de modelos son especialmente útiles para dirigir campañas de venta cruzada priorizando los segmentos con mayor probabilidad estimada.
+
+A continuación, se definen las funciones y visualizaciones que permiten construir una escala de ratings en base a la probabilidad de conversión asignada por el modelo, lo que permitirá una segmentación efectiva en acciones comerciales futuras.
+
+
+```{r func_rating, message=FALSE, warning=FALSE}
+# Función que genera una variable de rating según la probabilidad del modelo
+score <- function(df){
+  df <- as.data.table(df)
+  
+  df <- df[, rating := 
+              ifelse(p1 > 0.9550, '01',
+              ifelse(p1 > 0.8750 & p1 <= 0.9550, '02',
+              ifelse(p1 > 0.650 & p1 <= 0.8750, '03',
+              ifelse(p1 > 0.5275 & p1 <= 0.650, '04',
+              ifelse(p1 > 0.310 & p1 <= 0.5275, '05',
+              ifelse(p1 > 0.2255 & p1 <= 0.310, '06',
+              ifelse(p1 > 0.1850 & p1 <= 0.2255, '07',
+              ifelse(p1 > 0.1250 & p1 <= 0.1850, '08',
+              ifelse(p1 > 0.0775 & p1 <= 0.1250, '09',
+                     '10'))))))))) ]
+  
+  df <- df %>% select(p0, p1, rating)
+  return(df)
+}
+
+# Función para calcular la probabilidad media y proporción de muestra por tramo
+prob_medias <- function(df){
+  df <- df %>%
+    group_by(rating) %>%
+    summarise(
+      num = n(),
+      total_muestra = num / nrow(df),
+      media_prob = mean(p1)
+    )
+  
+  return(df %>% reactViewTable())
+}
+
+# Función para visualizar la distribución de probabilidades estimadas
+densidad <- function(df, var, bins = 20) {
+  a <- as.symbol(var)
+  ggplot(df, aes(!!a)) +
+    geom_histogram(fill = "#efeee0", color = "#2E86AB", bins = bins) +
+    labs(y = '') +
+    theme_bw()
+}
+```
+
+```{r predict_model, message=FALSE, warning=FALSE, fig.align='center', fig.width=12, fig.height=6}
+# Predicción con el modelo sobre la muestra de validación
+pred_validation <- h2o.predict(modelo_factor, newdata = validacion)
+pred_validation <- as.data.frame(pred_validation)
+
+# Visualización de las primeras predicciones
+head(pred_validation,10) %>% reactViewTable
+
+# Histograma de la distribución de probabilidades de conversión
+densidad(pred_validation, 'p1')
+
+```
+
+<br>
+
+ La tabla muestra las predicciones de nuestro modelo para la muestra de validación. 
+ 
+ *  predict: valor predicho (0 o 1), según el umbral por defecto del modelo.
+ *  p0: probabilidad estimada de que el cliente no contrate (clase 0).
+ *  p1: probabilidad estimada de que sí contrate (clase 1).
+ *  StdErr: error estándar asociado a la estimación.
+ 
+En el histograma de las probabilidades de conversión (p1) lo que se observa es:
+
+ *  El modelo predice pocas probabilidades altas de conversión. La mayoría de los clientes tienen probabilidades por debajo de 0.2.
+ *  Hay un gran número de clientes con p1 cercanas a 0.05 o 0.10, lo que refleja un modelo conservador debido al desbalance de clases.
+
+Este comportamiento es común en modelos entrenados con datasets donde los positivos (clientes que contratan) son minoría. El modelo se vuelve muy cauto al predecir “sí”. H2O no usa por defecto el umbral clásico de 0.5. En lugar de eso, calcula un threshold óptimo internamente según las métricas del modelo.
+ 
+Esto nos sirve para entender la capacidad de segmentación del modelo. Como la mayoría de las probabilidades están muy concentradas en valores bajos, tiene mucho sentido tramear en ratings.
+
+```{r ratings, message=FALSE, warning=FALSE}
+# Aplicamos la función de trameado por score sobre la predicción en la muestra de validación
+rating_validation <- score(pred_validation)
+
+# Calculamos la probabilidad media por tramo
+prob_medias(rating_validation)
+```
+
+```{r rating_plot, message=FALSE, warning=FALSE, fig.align='center', fig.width=12, fig.height=6}
+# Creamos la tabla de probabilidades medias por tramo
+tabla_ratings <- rating_validation %>%
+  group_by(rating) %>%
+  summarise(
+    num = n(),
+    total_muestra = num / nrow(rating_validation),
+    media_prob = mean(p1)
+  )
+
+# Dibujamos el gráfico de barras
+ggplot(tabla_ratings, aes(x = rating, y = media_prob)) +
+  geom_col(fill = "#2E86AB", alpha = 0.8) +
+  geom_text(aes(label = round(media_prob * 100, 2)), vjust = -0.5, size = 4) +
+  labs(x = "Rating", y = "Probabilidad media de contratación", 
+       title = "Probabilidad media por rating (validación)") +
+  theme_minimal(base_size = 14)
+```
+
+Tal y como puede observarse en el gráfico de probabilidad media por rating, el modelo logra segmentar parcialmente la cartera en función del riesgo de contratación. 
+Los ratings los hemos definido manualmente como cortes sobre la probabilidad de contratación. Se generan 10 ratings de los cuales solo tenemos registros del tramo 06 al 10, , lo que indica que el modelo no es capaz de asignar una probabilidad alta (superior al 30%) a ningún cliente. Esto es coherente con los valores moderados del AUC y AUCPR obtenidos previamente, y refleja la dificultad del modelo para identificar con seguridad a los clientes más propensos, esta clasificación sigue siendo útil para segmentar clientes. 
+
+Además, la lógica de tramos puede aplicarse a nuevos registros, asignándoles automáticamente un rating según la probabilidad estimada (p1), lo que facilita su priorización comercial. Los ratings disponibles presentan una progresión decreciente clara, lo que refuerza su utilidad como herramienta de priorización comercial.
+
+# 10.  Predicciones futuras
+
+Procedemos a realizar predicciones futuras con la muestra de test proporcionada. Para ello, es necesario aplicar los mismos trameados y transformaciones utilizados durante la construcción del modelo. Además, eliminamos las variables que fueron descartadas previamente por colinealidad o baja capacidad predictiva.
+
+```{r predict_test, message=FALSE, warning=FALSE}
+
+# Definimos las categorías
+bucket_antveh <- function(variable){
+  ifelse(variable == 0, 'AntVeh_01_[0]',
+  ifelse(variable %in% c(1, 2), 'AntVeh_02_[1-2]', 'AntVeh_03_[3-10]'))
+}
+bucket_age <- function(variable){
+  ifelse(variable <= 24, 'Edad_01_[20-24]',
+  ifelse(variable > 24 & variable <= 35, 'Edad_02_[25-35]',
+  ifelse(variable > 35 & variable <= 48, 'Edad_03_[36-48]',
+         'Edad_04_[49-85]')))
+}
+
+# Cargamos el conjunto de test
+test <- fread('/Users/oscar/Desktop/BIG DATA/2o TRIMESTRE/MODULO 7_Big Data en el sector seguros/3_Evaluación Practica/CUESTION2_MODELO_DE_VENTA_CRUZADA/dataVCTestCasoPractico.csv')
+
+# Eliminamos columna ID si existe
+test$id <- NULL
+
+# Trameado de variables igual que en entrenamiento
+test$Edad_bucket <- bucket_age(test$Edad)
+test$AntiguedadVehiculo_bucket <- bucket_antveh(test$AntiguedadVehiculo)
+
+# Variables de canal (como en el entrenamiento)
+test$Policy_Sales_Channel <- as.character(test$Policy_Sales_Channel)
+test <- test %>% mutate(Policy_Sales_Channel_bucket = as.character(nchar(Policy_Sales_Channel)))
+
+# Eliminamos variables no usadas
+drop_variables <- c("Carnet", "Edad", "AntiguedadVehiculo", "PrimaMensualActual",
+                    "Policy_Sales_Channel", "SiniestroAnterior")
+
+# Creamos dataset final de test
+test_fin <- test %>% select(-all_of(drop_variables))
+
+```
+
+<br>
+
+Inclusión al formato de *h2o.ai* y realización de las predicciones:
+
+```{r predictTestH2O, message=FALSE, warning=FALSE}
+# Convertimos los datos a formato H2O
+test_h2o <- as.h2o(test_fin)
+
+# Realizamos la predicción con el modelo final
+pred_test <- as.data.frame(h2o.predict(modelo_factor, newdata = test_h2o))
+
+# Mostramos las primeras 1000 predicciones
+head(pred_test, 1000) %>% reactViewTable()
+```
+
+
+```{r, message = FALSE, warning = FALSE}
+
+rating_test <- score(pred_test)
+
+prob_medias(rating_test)
+
+```
+# 11. Conclusión final del modelo de propensión
+
+Tras aplicar el modelo de regresión logística sobre la muestra de test, hemos podido clasificar a los clientes en una escala de ratings basada en su probabilidad estimada de contratar un nuevo seguro con la compañía. Este score nos permite segmentar la cartera en función del interés potencial del cliente y, por tanto, optimizar las acciones comerciales orientadas a la venta cruzada.
+
+En nuestro caso, observamos que la mayoría de los clientes test se concentran en los ratings más bajos, concretamente un 32% en el tramo 10 (probabilidad media del 4%) y un 21% en el tramo 09 (probabilidad media del 10%). En contraste, el rating 06 —que agrupa a los perfiles más afines a la contratación según el modelo— representa solo el 9% de la muestra, pero alcanza una probabilidad media de conversión del 27%. Esta distribución es muy similar a la obtenida sobre la muestra de validación, lo que confirma la estabilidad del modelo y su buena generalización.
+
+A pesar de que las probabilidades absolutas pueden parecer bajas, el modelo presenta una capacidad de discriminación razonable, con un AUC de 0.69 y un AUCPR de 0.20, valores equilibrados tanto en entrenamiento como en validación. Esto indica que el modelo es robusto y útil para ordenar correctamente a los clientes según su afinidad a contratar un seguro, que es precisamente el objetivo en este tipo de modelos.
+
+La finalidad no es predecir con certeza quién contratará, sino proporcionar una herramienta eficaz de segmentación comercial. En este sentido, recomendamos priorizar las acciones de marketing comenzando por el rating 06 y continuar, si los recursos lo permiten, con los tramos 07 y 08. En caso de no poder actuar sobre un tramo completo, se puede seguir discriminando dentro de él utilizando la probabilidad individual de contratación proporcionada por el modelo.
+
+En resumen, este primer modelo nos permite establecer una base sólida para optimizar campañas de venta cruzada mediante criterios de propensión al cliente. A futuro, será interesante evaluar nuevas fuentes de información o técnicas avanzadas que permitan aumentar su capacidad predictiva sin perder interpretabilidad.
+
+# 12. Información de la sesión
+
+En favor de la replicabilidad: 
+
+```{r message = FALSE, warning=FALSE}
+
+sessionInfo()
+
+```
